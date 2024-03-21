@@ -1,2 +1,35 @@
-code
-kkk
+import optuna
+import numpy as np
+import pandas as pd
+
+# Подготавливаем данные
+df = pd.DataFrame({
+    'comfort': [1, 2, 3, 4, 5],
+    'business': [5, 4, 3, 2, 1],
+    'comfort+': [2, 3, 4, 5, 6]
+})
+
+X = df[['comfort', 'business']].values
+y = df['comfort+'].values
+
+# Функция для оптимизации
+def objective(trial):
+    # Генерируем коэффициенты в заданном диапазоне
+    coeff1 = trial.suggest_float('coeff1', 0, 10)
+    coeff2 = trial.suggest_float('coeff2', 0, 10)
+
+    # Вычисляем предсказания
+    predictions = X @ np.array([coeff1, coeff2])
+    
+    # Рассчитываем функцию потерь как сумму квадратов ошибок
+    loss = np.sum((predictions - y) ** 2)
+
+    return loss
+
+# Создаем исследование и оптимизируем
+study = optuna.create_study(direction='minimize')
+study.optimize(objective, n_trials=100)
+
+# Выводим результаты
+print("Лучшие коэффициенты:", study.best_params)
+
