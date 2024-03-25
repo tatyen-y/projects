@@ -1,35 +1,16 @@
-import optuna
-import numpy as np
-import pandas as pd
+# Разделяем DataFrame на две части: с непустыми и с пустыми датами
+df_non_empty_dates = df.dropna(subset=['end_date'])
+df_empty_dates = df[df['end_date'].isna()]
 
-# Подготавливаем данные
-df = pd.DataFrame({
-    'comfort': [1, 2, 3, 4, 5],
-    'business': [5, 4, 3, 2, 1],
-    'comfort+': [2, 3, 4, 5, 6]
-})
+# Обрабатываем непустые даты
+df_non_empty_max_dates = df_non_empty_dates.groupby('objectId', as_index=False).max()
 
-X = df[['comfort', 'business']].values
-y = df['comfort+'].values
+# Обрабатываем пустые даты, выбираем первую запись для каждого objectId
+df_empty_dates_first = df_empty_dates.groupby('objectId', as_index=False).first()
 
-# Функция для оптимизации
-def objective(trial):
-    # Генерируем коэффициенты в заданном диапазоне
-    coeff1 = trial.suggest_float('coeff1', 0, 10)
-    coeff2 = trial.suggest_float('coeff2', 0, 10)
+# Объединяем результаты, давая приоритет непустым датам
+combined_df = pd.concat([df_non_empty_max_dates, df_empty_dates_first]).drop_duplicates('objectId', keep='first')
 
-    # Вычисляем предсказания
-    predictions = X @ np.array([coeff1, coeff2])
-    
-    # Рассчитываем функцию потерь как сумму квадратов ошибок
-    loss = np.sum((predictions - y) ** 2)
+combined_df
 
-    return loss
-
-# Создаем исследование и оптимизируем
-study = optuna.create_study(direction='minimize')
-study.optimize(objective, n_trials=100)
-
-# Выводим результаты
-print("Лучшие коэффициенты:", study.best_params)
 
