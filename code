@@ -1,16 +1,30 @@
-# Разделяем DataFrame на две части: с непустыми и с пустыми датами
-df_non_empty_dates = df.dropna(subset=['end_date'])
-df_empty_dates = df[df['end_date'].isna()]
+import pandas as pd
+import os
 
-# Обрабатываем непустые даты
-df_non_empty_max_dates = df_non_empty_dates.groupby('objectId', as_index=False).max()
+# Путь к папке с файлами Excel
+folder_path = 'путь_к_папке_с_файлами'
 
-# Обрабатываем пустые даты, выбираем первую запись для каждого objectId
-df_empty_dates_first = df_empty_dates.groupby('objectId', as_index=False).first()
+# Словарь для хранения DataFrame'ов
+dfs = {}
 
-# Объединяем результаты, давая приоритет непустым датам
-combined_df = pd.concat([df_non_empty_max_dates, df_empty_dates_first]).drop_duplicates('objectId', keep='first')
+# Генерация списка имен файлов и итерация по ним
+for year in range(2018, 2024):  # от 2018 до 2023 включительно
+    for quarter in range(1, 5):  # от 1 до 4 квартала
+        file_name = f"Индексы {quarter} квартал {year}.xlsx"
+        file_path = os.path.join(folder_path, file_name)
+        
+        # Формирование ключа для словаря в формате Q1_2018 и т.д.
+        dict_key = f"Q{quarter}_{year}"
+        
+        # Загрузка файла Excel в DataFrame и сохранение в словаре
+        try:
+            dfs[dict_key] = pd.read_excel(file_path)
+        except FileNotFoundError:
+            print(f"Файл не найден: {file_path}")
+        except Exception as e:
+            print(f"Ошибка при открытии файла {file_path}: {e}")
 
-combined_df
+# Теперь DataFrame'ы доступны в словаре dfs и могут быть получены по ключу, например dfs['Q1_2018']
+
 
 
