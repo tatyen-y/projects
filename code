@@ -1,30 +1,32 @@
-import pandas as pd
-import os
+import time
+import logging
 
-# Путь к папке с файлами Excel
-folder_path = 'путь_к_папке_с_файлами'
+# Настройка логирования
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-# Словарь для хранения DataFrame'ов
-dfs = {}
+li_cad_quart = ["кадастровый номер 1", "кадастровый номер 2"]  # Пример списка кадастровых номеров
+y_li, x_li, cad_li, type_li, error_li = [], [], [], [], []
 
-# Генерация списка имен файлов и итерация по ним
-for year in range(2018, 2024):  # от 2018 до 2023 включительно
-    for quarter in range(1, 5):  # от 1 до 4 квартала
-        file_name = f"Индексы {quarter} квартал {year}.xlsx"
-        file_path = os.path.join(folder_path, file_name)
-        
-        # Формирование ключа для словаря в формате Q1_2018 и т.д.
-        dict_key = f"Q{quarter}_{year}"
-        
-        # Загрузка файла Excel в DataFrame и сохранение в словаре
-        try:
-            dfs[dict_key] = pd.read_excel(file_path)
-        except FileNotFoundError:
-            print(f"Файл не найден: {file_path}")
-        except Exception as e:
-            print(f"Ошибка при открытии файла {file_path}: {e}")
+for i in range(len(li_cad_quart)):
+    try:
+        d3name = li_cad_quart[i]
+        logging.info(f'Обработка кадастрового номера: {d3name}')
+        area = Area(d3name, center_only=True, area_type=2, use_cache=True)
+        coords = area.get_attrs()
+        y_li.append(coords['center']['y'])
+        x_li.append(coords['center']['x'])
+        cad_li.append(d3name)
+        type_li.append('Quartal')
+        logging.info(f'Успешно добавлены координаты: Y={coords["center"]["y"]}, X={coords["center"]["x"]}')
+    except Exception as e:
+        logging.error(f'Ошибка при обработке {d3name}: {str(e)}')
+        error_li.append(d3name)
+    finally:
+        time.sleep(6)  # Сохраняем паузу, но это можно адаптировать если используется асинхронное API
 
-# Теперь DataFrame'ы доступны в словаре dfs и могут быть получены по ключу, например dfs['Q1_2018']
+if error_li:
+    logging.error(f'Ошибки произошли при обработке следующих номеров: {error_li}')
+
 
 
 
