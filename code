@@ -1,31 +1,39 @@
-import time
-import logging
+import pandas as pd
+import seaborn as sns
+import matplotlib.pyplot as plt
 
-# Настройка логирования
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+# Пример данных
+data = {
+    'id': [1, 2, 3, 4, 5, 6, 7, 8],
+    'цена_1': [100, 150, 200, 250, 300, 350, 400, 450],
+    'цена_2': [110, 160, 210, 260, 310, 360, 410, 460],
+    'time': [20201, 20201, 20202, 20202, 20203, 20203, 20204, 20204]
+}
+df = pd.DataFrame(data)
 
-li_cad_quart = ["кадастровый номер 1", "кадастровый номер 2"]  # Пример списка кадастровых номеров
-y_li, x_li, cad_li, type_li, error_li = [], [], [], [], []
+# Преобразование столбца time в год и квартал
+df['year'] = df['time'] // 10
+df['quarter'] = df['time'] % 10
 
-for i in range(len(li_cad_quart)):
-    try:
-        d3name = li_cad_quart[i]
-        logging.info(f'Обработка кадастрового номера: {d3name}')
-        area = Area(d3name, center_only=True, area_type=2, use_cache=True)
-        coords = area.get_attrs()
-        y_li.append(coords['center']['y'])
-        x_li.append(coords['center']['x'])
-        cad_li.append(d3name)
-        type_li.append('Quartal')
-        logging.info(f'Успешно добавлены координаты: Y={coords["center"]["y"]}, X={coords["center"]["x"]}')
-    except Exception as e:
-        logging.error(f'Ошибка при обработке {d3name}: {str(e)}')
-        error_li.append(d3name)
-    finally:
-        time.sleep(6)  # Сохраняем паузу, но это можно адаптировать если используется асинхронное API
+# Группировка данных и расчет средних значений
+avg_prices = df.groupby(['year', 'quarter']).agg({'цена_1': 'mean', 'цена_2': 'mean'}).reset_index()
 
-if error_li:
-    logging.error(f'Ошибки произошли при обработке следующих номеров: {error_li}')
+# Преобразование данных в длинный формат для удобства построения графика
+avg_prices_melted = avg_prices.melt(id_vars=['year', 'quarter'], value_vars=['цена_1', 'цена_2'],
+                                    var_name='Цены', value_name='Средняя цена')
+
+# Создание нового столбца для упорядочивания данных по времени
+avg_prices_melted['time'] = avg_prices_melted['year'].astype(str) + 'Q' + avg_prices_melted['quarter'].astype(str)
+
+# Визуализация данных
+plt.figure(figsize=(12, 8))
+sns.barplot(x='time', y='Средняя цена', hue='Цены', data=avg_prices_melted)
+plt.title('Поквартальная средняя цена для цена_1 и цена_2')
+plt.xlabel('Время (год+квартал)')
+plt.ylabel('Средняя цена')
+plt.legend(title='Тип цены')
+plt.xticks(rotation=45)
+plt.show()
 
 
 
