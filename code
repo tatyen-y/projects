@@ -1,5 +1,5 @@
 import requests
-import base64
+import uuid
 import json
 
 # Установите ваши авторизационные данные
@@ -12,12 +12,11 @@ def get_access_token(client_secret, authorization_data):
     headers = {
         "Content-Type": "application/x-www-form-urlencoded",
         "Accept": "application/json",
-        "Authorization": f"Basic {authorization_data}"
+        "Authorization": f"Basic {authorization_data}",
+        "RqUID": str(uuid.uuid4())
     }
-    data = {
-        "scope": "GIGACHAT_API_PERS"
-    }
-    response = requests.post(url, headers=headers, data=data)
+    data = "scope=GIGACHAT_API_PERS"
+    response = requests.post(url, headers=headers, data=data, verify=False)
     
     if response.status_code == 200:
         return response.json()["access_token"]
@@ -28,24 +27,38 @@ def get_access_token(client_secret, authorization_data):
 access_token = get_access_token(client_secret, authorization_data)
 print("Access Token:", access_token)
 
-# Пример запроса к GigaChat API для получения списка моделей
-def get_models(access_token):
-    url = "https://gigachat.devices.sberbank.ru/api/v1/models"
+# Функция для генерации текста с помощью GigaChat
+def generate_text(access_token, prompt, model_id="GigaChat-Pro"):
+    url = "https://gigachat.devices.sberbank.ru/api/v1/chat/completions"
     headers = {
+        "Content-Type": "application/json",
+        "Accept": "application/json",
         "Authorization": f"Bearer {access_token}"
     }
-    response = requests.get(url, headers=headers)
+    data = {
+        "model": model_id,  # Используйте выбранный ID модели
+        "messages": [
+            {
+                "role": "user",
+                "content": prompt
+            }
+        ],
+        "temperature": 1.0,
+        "top_p": 0.1,
+        "n": 1,
+        "stream": False,
+        "max_tokens": 512,
+        "repetition_penalty": 1
+    }
+    
+    response = requests.post(url, headers=headers, json=data, verify=False)
     
     if response.status_code == 200:
         return response.json()
     else:
-        raise Exception(f"Failed to get models: {response.status_code}, {response.text}")
+        raise Exception(f"Failed to generate text: {response.status_code}, {response.text}")
 
-# Выполните запрос для получения списка моделей
-models = get_models(access_token)
-print("Available Models:", json.dumps(models, indent=4, ensure_ascii=False))
-
-
-
-
-
+# Пример использования функции для генерации текста
+prompt = "Ты знаешь биографии известных людей?"
+response = generate_text(access_token, prompt)
+print("GigaChat Response:", json.dumps(response, indent=4, ensure_ascii=False))
