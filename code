@@ -1,39 +1,50 @@
-import pandas as pd
-import seaborn as sns
-import matplotlib.pyplot as plt
+import requests
+import base64
+import json
 
-# Пример данных
-data = {
-    'id': [1, 2, 3, 4, 5, 6, 7, 8],
-    'цена_1': [100, 150, 200, 250, 300, 350, 400, 450],
-    'цена_2': [110, 160, 210, 260, 310, 360, 410, 460],
-    'time': [20201, 20201, 20202, 20202, 20203, 20203, 20204, 20204]
-}
-df = pd.DataFrame(data)
+# Установите ваши авторизационные данные
+client_secret = "c1e9501f-0a26-4d4a-a86a-5c1797dceb75"
+authorization_data = "ZmQyODg0NzEtZDhjMy00MWJkLWFlYjktNmY0NDUxNDNhMDljOmMxZTk1MDFmLTBhMjYtNGQ0YS1hODZhLTVjMTc5N2RjZWI3NQ=="
 
-# Преобразование столбца time в год и квартал
-df['year'] = df['time'] // 10
-df['quarter'] = df['time'] % 10
+# Функция для получения токена доступа
+def get_access_token(client_secret, authorization_data):
+    url = "https://ngw.devices.sberbank.ru:9443/api/v2/oauth"
+    headers = {
+        "Content-Type": "application/x-www-form-urlencoded",
+        "Accept": "application/json",
+        "Authorization": f"Basic {authorization_data}"
+    }
+    data = {
+        "scope": "GIGACHAT_API_PERS"
+    }
+    response = requests.post(url, headers=headers, data=data)
+    
+    if response.status_code == 200:
+        return response.json()["access_token"]
+    else:
+        raise Exception(f"Failed to get access token: {response.status_code}, {response.text}")
 
-# Группировка данных и расчет средних значений
-avg_prices = df.groupby(['year', 'quarter']).agg({'цена_1': 'mean', 'цена_2': 'mean'}).reset_index()
+# Получите токен доступа
+access_token = get_access_token(client_secret, authorization_data)
+print("Access Token:", access_token)
 
-# Преобразование данных в длинный формат для удобства построения графика
-avg_prices_melted = avg_prices.melt(id_vars=['year', 'quarter'], value_vars=['цена_1', 'цена_2'],
-                                    var_name='Цены', value_name='Средняя цена')
+# Пример запроса к GigaChat API для получения списка моделей
+def get_models(access_token):
+    url = "https://gigachat.devices.sberbank.ru/api/v1/models"
+    headers = {
+        "Authorization": f"Bearer {access_token}"
+    }
+    response = requests.get(url, headers=headers)
+    
+    if response.status_code == 200:
+        return response.json()
+    else:
+        raise Exception(f"Failed to get models: {response.status_code}, {response.text}")
 
-# Создание нового столбца для упорядочивания данных по времени
-avg_prices_melted['time'] = avg_prices_melted['year'].astype(str) + 'Q' + avg_prices_melted['quarter'].astype(str)
+# Выполните запрос для получения списка моделей
+models = get_models(access_token)
+print("Available Models:", json.dumps(models, indent=4, ensure_ascii=False))
 
-# Визуализация данных
-plt.figure(figsize=(12, 8))
-sns.barplot(x='time', y='Средняя цена', hue='Цены', data=avg_prices_melted)
-plt.title('Поквартальная средняя цена для цена_1 и цена_2')
-plt.xlabel('Время (год+квартал)')
-plt.ylabel('Средняя цена')
-plt.legend(title='Тип цены')
-plt.xticks(rotation=45)
-plt.show()
 
 
 
