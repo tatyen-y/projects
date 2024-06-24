@@ -1,9 +1,30 @@
 import pandas as pd
 import numpy as np
 
-# Загрузка данных
+# Загрузка данных о городах из GeoNames
+columns = [
+    'geonameid', 'name', 'asciiname', 'alternatenames', 'latitude', 'longitude', 'feature_class',
+    'feature_code', 'country_code', 'cc2', 'admin1_code', 'admin2_code', 'admin3_code', 'admin4_code',
+    'population', 'elevation', 'dem', 'timezone', 'modification_date'
+]
+
+# Скачайте и распакуйте файл RU.txt и укажите путь к нему
+cities_data = pd.read_csv('RU.txt', sep='\t', header=None, names=columns)
+
+# Фильтрация данных для получения только городов (feature_code = 'PPL' или 'PPLA' и т.д.)
+cities = cities_data[(cities_data['feature_class'] == 'P') & (cities_data['feature_code'].str.startswith('PPL'))]
+
+# Оставим только нужные столбцы
+cities = cities[['name', 'latitude', 'longitude', 'population']]
+
+# Переименование столбцов для совместимости с нашим скриптом
+cities = cities.rename(columns={'name': 'City', 'latitude': 'LAT', 'longitude': 'LON', 'population': 'Population'})
+
+# Сохранение отфильтрованных данных
+cities.to_csv('russian_cities_with_coordinates.csv', index=False)
+
+# Загрузка данных объектов строительства
 df = pd.read_csv('df.csv')
-pop = pd.read_csv('pop.csv')
 
 # Функция для вычисления расстояния по формуле Гаверсина
 def haversine(lat1, lon1, lat2, lon2):
@@ -21,22 +42,29 @@ def find_nearest_city(construction_lat, construction_lon, cities):
     nearest_city_population = 0
     
     for _, city in cities.iterrows():
-        city_coords = (city['LAN'], city['LON'])
+        city_coords = (city['LAT'], city['LON'])
         distance = haversine(construction_lat, construction_lon, city_coords[0], city_coords[1])
         
         if distance < min_distance:
             min_distance = distance
             nearest_city_population = city['Population']
-    
+        
+        # Отладочный вывод для проверки (можно удалить после тестирования)
+        print(f"Construction: ({construction_lat}, {construction_lon}), City: ({city['LAT']}, {city['LON']}), Distance: {distance}, Min Distance: {min_distance}, Population: {nearest_city_population}")
+
     return nearest_city_population
 
 # Применение функции к каждому объекту строительства
 df['nearest_city_population'] = df.apply(
-    lambda row: find_nearest_city(row['coordinates.latitude'], row['coordinates.longitude'], pop), axis=1)
+    lambda row: find_nearest_city(row['coordinates.latitude'], row['coordinates.longitude'], cities), axis=1)
+
+# Проверка результата
+print(df[['coordinates.latitude', 'coordinates.longitude', 'nearest_city_population']].head())
 
 # Сохранение результата
 df.to_csv('constructions_with_population.csv', index=False)
 
 # Вывод результата
 import ace_tools as tools; tools.display_dataframe_to_user(name="Constructions with Nearest City Population", dataframe=df)
+
 
