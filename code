@@ -1,10 +1,10 @@
 import pandas as pd
 from sklearn.impute import KNNImputer
-from sklearn.metrics import accuracy_score
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, confusion_matrix
 import numpy as np
 from sklearn.model_selection import train_test_split
 
-# Пример DataFrame с данными
+# Пример DataFrame с данными, где известны правильные ответы
 data = {
     'feature1': [10, 20, 30, 40, 50, 60, 70, 80, 90, 100],
     'feature2': [5, 15, 25, 35, 45, 55, 65, 75, 85, 95],
@@ -45,6 +45,13 @@ filled_values = imputed_df.loc[test_df.index, 'parking']
 
 # Оцениваем точность заполнения пропусков
 accuracy = accuracy_score(true_values, filled_values)
+precision = precision_score(true_values, filled_values, average='weighted')
+recall = recall_score(true_values, filled_values, average='weighted')
+f1 = f1_score(true_values, filled_values, average='weighted')
+conf_matrix = confusion_matrix(true_values, filled_values)
 
 print(f"Точность заполнения пропусков: {accuracy:.2f}")
-
+print(f"Precision (Точность): {precision:.2f}")
+print(f"Recall (Полнота): {recall:.2f}")
+print(f"F1-Score: {f1:.2f}")
+print(f"Confusion Matrix:\n{conf_matrix}")
