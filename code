@@ -1,70 +1,50 @@
 import pandas as pd
+from sklearn.impute import KNNImputer
+from sklearn.metrics import accuracy_score
 import numpy as np
+from sklearn.model_selection import train_test_split
 
-# Загрузка данных о городах из GeoNames
-columns = [
-    'geonameid', 'name', 'asciiname', 'alternatenames', 'latitude', 'longitude', 'feature_class',
-    'feature_code', 'country_code', 'cc2', 'admin1_code', 'admin2_code', 'admin3_code', 'admin4_code',
-    'population', 'elevation', 'dem', 'timezone', 'modification_date'
-]
+# Пример DataFrame с данными
+data = {
+    'feature1': [10, 20, 30, 40, 50, 60, 70, 80, 90, 100],
+    'feature2': [5, 15, 25, 35, 45, 55, 65, 75, 85, 95],
+    'feature3': [100, 200, 300, 400, 500, 600, 700, 800, 900, 1000],
+    'parking': ['подземная', 'наземная', 'подземная', 'многоуровневая наземная', 'наземная', 'подземная', 'многоуровневая наземная', 'наземная', 'подземная', 'многоуровневая наземная']
+}
 
-# Скачайте и распакуйте файл RU.txt и укажите путь к нему
-cities_data = pd.read_csv('RU.txt', sep='\t', header=None, names=columns)
+df = pd.DataFrame(data)
 
-# Фильтрация данных для получения только городов (feature_code = 'PPL' или 'PPLA' и т.д.)
-cities = cities_data[(cities_data['feature_class'] == 'P') & (cities_data['feature_code'].str.startswith('PPL'))]
+# Преобразуем категориальные значения парковки в числовые
+parking_mapping = {'наземная': 0, 'многоуровневая наземная': 1, 'подземная': 2}
+df['parking'] = df['parking'].map(parking_mapping)
 
-# Оставим только нужные столбцы
-cities = cities[['name', 'latitude', 'longitude', 'population']]
+# Разделяем данные на обучающую и тестовую выборки
+train_df, test_df = train_test_split(df, test_size=0.3, random_state=42)
 
-# Переименование столбцов для совместимости с нашим скриптом
-cities = cities.rename(columns={'name': 'City', 'latitude': 'LAT', 'longitude': 'LON', 'population': 'Population'})
+# Сохраняем истинные значения для тестовой выборки
+true_values = test_df['parking'].copy()
 
-# Сохранение отфильтрованных данных
-cities.to_csv('russian_cities_with_coordinates.csv', index=False)
+# Искусственно создаем пропуски в столбце 'parking' в тестовой выборке
+test_df['parking'] = np.nan
 
-# Загрузка данных объектов строительства
-df = pd.read_csv('df.csv')
+# Объединяем обучающую и тестовую выборки для заполнения пропусков
+combined_df = pd.concat([train_df, test_df], ignore_index=True)
 
-# Функция для вычисления расстояния по формуле Гаверсина
-def haversine(lat1, lon1, lat2, lon2):
-    R = 6371  # радиус Земли в километрах
-    phi1, phi2 = np.radians(lat1), np.radians(lat2)
-    delta_phi = np.radians(lat2 - lat1)
-    delta_lambda = np.radians(lon2 - lon1)
-    a = np.sin(delta_phi / 2) ** 2 + np.cos(phi1) * np.cos(phi2) * np.sin(delta_lambda / 2) ** 2
-    c = 2 * np.arctan2(np.sqrt(a), np.sqrt(1 - a))
-    return R * c
+# Инициализируем KNNImputer и заполняем пропуски
+imputer = KNNImputer(n_neighbors=3)
+imputed_data = imputer.fit_transform(combined_df)
 
-# Функция для нахождения ближайшего города и его популяции
-def find_nearest_city(construction_lat, construction_lon, cities):
-    min_distance = float('inf')
-    nearest_city_population = 0
-    
-    for _, city in cities.iterrows():
-        city_coords = (city['LAT'], city['LON'])
-        distance = haversine(construction_lat, construction_lon, city_coords[0], city_coords[1])
-        
-        if distance < min_distance:
-            min_distance = distance
-            nearest_city_population = city['Population']
-        
-        # Отладочный вывод для проверки (можно удалить после тестирования)
-        print(f"Construction: ({construction_lat}, {construction_lon}), City: ({city['LAT']}, {city['LON']}), Distance: {distance}, Min Distance: {min_distance}, Population: {nearest_city_population}")
+# Преобразуем обратно в DataFrame и добавляем имена колонок
+imputed_df = pd.DataFrame(imputed_data, columns=combined_df.columns)
 
-    return nearest_city_population
+# Преобразуем значения в столбце 'parking' обратно в дискретные
+imputed_df['parking'] = np.round(imputed_df['parking']).astype(int)
 
-# Применение функции к каждому объекту строительства
-df['nearest_city_population'] = df.apply(
-    lambda row: find_nearest_city(row['coordinates.latitude'], row['coordinates.longitude'], cities), axis=1)
+# Извлекаем заполненные значения для тестовой выборки
+filled_values = imputed_df.loc[test_df.index, 'parking']
 
-# Проверка результата
-print(df[['coordinates.latitude', 'coordinates.longitude', 'nearest_city_population']].head())
+# Оцениваем точность заполнения пропусков
+accuracy = accuracy_score(true_values, filled_values)
 
-# Сохранение результата
-df.to_csv('constructions_with_population.csv', index=False)
-
-# Вывод результата
-import ace_tools as tools; tools.display_dataframe_to_user(name="Constructions with Nearest City Population", dataframe=df)
-
+print(f"Точность заполнения пропусков: {accuracy:.2f}")
 
