@@ -1,3 +1,7 @@
+import numpy as np
+import pandas as pd
+from tqdm import tqdm
+
 def get_analog_price(target_row, data, max_dist=5):
     try:
         idx = target_row.index[0]
@@ -18,19 +22,6 @@ def get_analog_price(target_row, data, max_dist=5):
         
         if analogs.shape[0] == 0:
             return -1, 0, -1
-
-        # Привязка к макрорегиону
-        try:
-            target_region_macro = target_row.at[idx, 'RegionMacro']
-            analogs['RegionMacro'] = analogs['RegionMacro']  # Ensure we're working with the correct column
-            if target_region_macro not in ['MOS', 'SPB']:
-                if target_row.at[idx, 'propertyClass.name'] == 'Комфорт':
-                    analogs['quarter_price_m2'] *= (1 + 0.1 * (analogs['propertyClass.name'] == 'Типовой'))
-                else:
-                    analogs['quarter_price_m2'] /= (1 + 0.1 * (analogs['propertyClass.name'] == 'Комфорт'))
-        except Exception as e:
-            print(f"Ошибка привязки к макрорегиону для индекса {idx}: {e}")
-            return None, None, None
 
         # Корректировка цен по времени
         try:
@@ -96,7 +87,7 @@ ap = []
 ac = []
 r = []
 
-required_columns = ['Y+Q', 'propertyClass.name', 'wallMaterial.name', 'lat', 'lon', 'parking_type', 'RegionMacro']
+required_columns = ['Y+Q', 'propertyClass.name', 'wallMaterial.name', 'lat', 'lon', 'parking_type']
 
 for idx in tqdm(data.index):
     target_row = data.iloc[[idx]]
