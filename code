@@ -1,61 +1,48 @@
-import numpy as np
-import pandas as pd
-from tqdm import tqdm
+def get_analog_price(target_row, data, max_dist=5):
+    # Получение индекса текущего объекта
+    idx = target_row.index[0]
 
-# Определение макрорегиона
-def region_macro(region: str) -> str:
-    if region in ('Г. Москва', 'Москва', 'Москва Город', 'Город Москва'):
-        return 'MOS'
-    elif region in ('Ленинградская Область', 'Ленинградская область'):
-        return 'LEN'
-    elif region in ('Московская Область', 'Московская область'):
-        return 'OBL'
-    elif region in ('Санкт-Петербург', 'Санкт-Петербург Город', 'Город Санкт-Петербург'):
-        return 'SPB'
-    elif region in ('Краснодарский Край', 'Краснодарский край'):
-        return 'KRA'
-    elif region in ('Амурская Область', 'Амурская область', 'Бурятия Республика', 'Забайкальский Край',
-                    'Забайкальский Край', 'Приморский Край', 'Приморский край', 'Магаданская Область',
-                    'Магаданская область', 'Камчатский Край', 'Камчатский край', 'Камчатка',
-                    'Сахалинская область', 'Сахалинская Область', 'Сахалин', 'Хабаровский Край',
-                    'Хабаровский край', 'Чукотский автономный округ', 'Чукотский АО', 'Чукотка',
-                    'Саха /Якутия/ Республика', 'Якутия', 'Саха', 'Саха Республика', 'Саха республика'):
-        return 'FAR'
-    else:
-        return 'RUS'
+    # Преобразование координат текущего объекта в радианы
+    lat = target_row.at[idx, 'lat'] * np.pi / 180
+    lon = target_row.at[idx, 'lon'] * np.pi / 180
 
-def get_analog_price(obs, data, max_dist=5):
-    idx = obs.index[0]
-
-    lat = obs.at[idx, 'lat'] * np.pi / 180
-    lon = obs.at[idx, 'lon'] * np.pi / 180
-
-    # Фильтрация данных
-    analog_filter = (data['ID'] != obs.at[idx, 'ID'])
+    # Фильтрация данных: исключаем текущий объект из данных
+    analog_filter = (data['ID'] != target_row.at[idx, 'ID'])
     analog_data = data[analog_filter].copy()
+    
+    # Преобразование координат аналогов в радианы
     analog_data['lat_rad'] = analog_data['lat'] * np.pi / 180
     analog_data['lon_rad'] = analog_data['lon'] * np.pi / 180
     analog_data['DISTANCE'] = np.arccos(np.sin(lat) * np.sin(analog_data['lat_rad']) +
                                         np.cos(lat) * np.cos(analog_data['lat_rad']) *
                                         np.cos(analog_data['lon_rad'] - lon)) * 6371
 
+    # Фильтрация аналогов в пределах max_dist км
     analogs = analog_data[analog_data['DISTANCE'] <= max_dist].copy()
     
     if analogs.shape[0] == 0:
         return -1, 0, -1  # Если нет аналогов в радиусе
 
+    # Корректировка по макрорегиону
+    target_region_macro = target_row.at[idx, 'RegionMacro']
+    if target_region_macro not in ['MOS', 'SPB']:
+        if target_row.at[idx, 'propertyClass.name'] == 'Комфорт':
+            analogs['quarter_price_m2'] *= (1 + 0.1 * (analogs['propertyClass.name'] == 'Типовой'))
+        else:
+            analogs['quarter_price_m2'] /= (1 + 0.1 * (analogs['propertyClass.name'] == 'Комфорт'))
+
     # Корректировка цен по времени
-    analogs['price_corrected'] = analogs['quarter_price_m2'] * (1.02 ** (obs.at[idx, 'Y+Q'] - analogs['Y+Q']))
+    analogs['price_corrected'] = analogs['quarter_price_m2'] * (1.02 ** (target_row.at[idx, 'Y+Q'] - analogs['Y+Q']))
 
     # Корректировка по типу стен
-    walls = obs.at[idx, 'wallMaterial.name']
+    walls = target_row.at[idx, 'wallMaterial.name']
     if walls in ['Монолит', 'Кирпич', 'Монолит-кирпич']:
         analogs['price_corrected'] *= (1 + 0.1 * (1 - analogs['wallMaterial.name'].isin(['Монолит', 'Кирпич', 'Монолит-кирпич'])))
     else:
         analogs['price_corrected'] /= (1 + 0.1 * analogs['wallMaterial.name'].isin(['Монолит', 'Кирпич', 'Монолит-кирпич']))
     
     # Корректировка по классу недвижимости
-    property_class = obs.at[idx, 'propertyClass.name']
+    property_class = target_row.at[idx, 'propertyClass.name']
     if property_class == 'Комфорт':
         analogs['price_corrected'] *= (1 + 0.1 * (analogs['propertyClass.name'] == 'Типовой'))
     elif property_class == 'Бизнес':
@@ -64,18 +51,9 @@ def get_analog_price(obs, data, max_dist=5):
         analogs['price_corrected'] /= (1 + 0.1 * (analogs['propertyClass.name'] == 'Комфорт'))
     
     # Корректировка по виду парковки
-    parking_type = obs.at[idx, 'parking_type']
+    parking_type = target_row.at[idx, 'parking_type']
     if parking_type == 'наземная' or parking_type == 'многоуровневая наземная':
         analogs['price_corrected'] /= (1 + 0.15 * (analogs['parking_type'] == 'подземная'))
-
-    # Корректировка по макрорегиону
-    obs_region_macro = region_macro(obs.at[idx, 'Region'])
-    analogs['RegionMacro'] = analogs['Region'].apply(region_macro)
-    if obs_region_macro not in ['MOS', 'SPB']:
-        if obs.at[idx, 'propertyClass.name'] == 'Комфорт':
-            analogs['price_corrected'] *= (1 + 0.1 * (analogs['propertyClass.name'] == 'Типовой'))
-        else:
-            analogs['price_corrected'] /= (1 + 0.1 * (analogs['propertyClass.name'] == 'Комфорт'))
 
     # Группировка и расчет средних значений
     analogs = analogs.groupby('ID').mean()
@@ -96,8 +74,8 @@ ac = []
 r = []
 
 for idx in tqdm(data.index):
-    obs = data.iloc[[idx]]
-    price2, analog_count2, readiness2 = get_analog_price(obs, data, max_dist=analog_dist)
+    target_row = data.iloc[[idx]]
+    price2, analog_count2, readiness2 = get_analog_price(target_row, data, max_dist=analog_dist)
     ap.append(price2)
     ac.append(analog_count2)
     r.append(readiness2)
@@ -110,4 +88,3 @@ data['AnalogCount'] = ac
 data['Readiness'] = r
 
 data.head()
-
