@@ -1,73 +1,61 @@
-def get_analog_price(target_row, data, max_dist=5):
-    idx = target_row.index[0]
-    lat = target_row.at[idx, 'lat'] * np.pi / 180
-    lon = target_row.at[idx, 'lon'] * np.pi / 180
+# Удаление дубликатов по индексу и проверка данных
+data = data.reset_index(drop=True)
+data['ID'] = data.index
 
-    # Фильтрация данных: исключаем текущий объект из данных
-    analog_filter = (data['ID'] != target_row.at[idx, 'ID'])
-    analog_data = data[analog_filter].copy()
+# Проверка на дублирующиеся значения в столбце ID
+if data['ID'].duplicated().any():
+    print("Внимание: найдены дублирующиеся значения в столбце 'ID'.")
 
-    analog_data['lat_rad'] = analog_data['lat'] * np.pi / 180
-    analog_data['lon_rad'] = analog_data['lon'] * np.pi / 180
-    analog_data['DISTANCE'] = np.arccos(np.sin(lat) * np.sin(analog_data['lat_rad']) +
-                                        np.cos(lat) * np.cos(analog_data['lat_rad']) *
-                                        np.cos(analog_data['lon_rad'] - lon)) * 6371
+# Применение функции к новому датасету
+analog_dist = 5.0
 
-    analogs = analog_data[analog_data['DISTANCE'] <= max_dist].copy()
+ap = []
+ac = []
+r = []
+
+required_columns = ['Y+Q', 'propertyClass.name', 'wallMaterial.name', 'lat', 'lon', 'parking_type', 'RegionMacro']
+
+for idx in tqdm(data.index):
+    target_row = data.iloc[[idx]]
     
-    if analogs.shape[0] == 0:
-        return -1, 0, -1
-
-    target_region_macro = target_row.at[idx, 'RegionMacro']
-    if target_region_macro not in ['MOS', 'SPB']:
-        if target_row.at[idx, 'propertyClass.name'] == 'Комфорт':
-            analogs['quarter_price_m2'] *= (1 + 0.1 * (analogs['propertyClass.name'] == 'Типовой'))
-        else:
-            analogs['quarter_price_m2'] /= (1 + 0.1 * (analogs['propertyClass.name'] == 'Комфорт'))
-
-    # Корректировка цен по времени
-    try:
-        analogs['price_corrected'] = analogs['quarter_price_m2'] * (1.02 ** (target_row.at[idx, 'Y+Q'] - analogs['Y+Q']))
-    except Exception as e:
-        print(f"Ошибка корректировки цен по времени для индекса {idx}: {e}")
-        return None, None, None
-
-    # Корректировка по типу стен
-    try:
-        walls = target_row.at[idx, 'wallMaterial.name']
-        if walls in ['Монолитный', 'Кирпичный', 'Монолитно-кирпичный']:
-            analogs['price_corrected'] *= (1 + 0.1 * (1 - analogs['wallMaterial.name'].isin(['Монолитный', 'Кирпичный', 'Монолитно-кирпичный'])))
-        else:
-            analogs['price_corrected'] /= (1 + 0.1 * analogs['wallMaterial.name'].isin(['Монолитный', 'Кирпичный', 'Монолитно-кирпичный']))
-    except Exception as e:
-        print(f"Ошибка корректировки по типу стен для индекса {idx}: {e}")
-        return None, None, None
+    # Проверка наличия всех необходимых столбцов и их значений
+    missing_columns = [col for col in required_columns if col not in target_row.columns or pd.isna(target_row.at[idx, col])]
+    if missing_columns:
+        print(f"Отсутствующие или некорректные столбцы для индекса {idx}: {missing_columns}")
+        ap.append(None)
+        ac.append(None)
+        r.append(None)
+        continue
     
-    # Корректировка по классу недвижимости
+    # Проверка форматов значений в столбцах
     try:
-        property_class = target_row.at[idx, 'propertyClass.name']
-        if property_class == 'Комфорт':
-            analogs['price_corrected'] *= (1 + 0.1 * (analogs['propertyClass.name'] == 'Типовой'))
-        elif property_class == 'Бизнес':
-            analogs['price_corrected'] *= (1 + 0.1 * (analogs['propertyClass.name'] == 'Комфорт'))
-        else:
-            analogs['price_corrected'] /= (1 + 0.1 * (analogs['propertyClass.name'] == 'Комфорт'))
-    except Exception as e:
-        print(f"Ошибка корректировки по классу недвижимости для индекса {idx}: {e}")
-        return None, None, None
-    
-    # Корректировка по виду парковки
-    try:
-        parking_type = target_row.at[idx, 'parking_type']
-        if parking_type == 'наземная' or parking_type == 'многоуровневая наземная':
-            analogs['price_corrected'] /= (1 + 0.15 * (analogs['parking_type'] == 'подземная'))
-    except Exception as e:
-        print(f"Ошибка корректировки по виду парковки для индекса {idx}: {e}")
-        return None, None, None
+        for col in ['lat', 'lon']:
+            target_row[col] = target_row[col].astype(float)
+    except ValueError as e:
+        print(f"Некорректные значения в столбце для индекса {idx}: {e}")
+        ap.append(None)
+        ac.append(None)
+        r.append(None)
+        continue
 
-    analogs = analogs.groupby('ID').mean()
-    price_mean = analogs['price_corrected'].mean()
-    analog_count = analogs.shape[0]
-    readiness_mean = analogs['ReadinessCalc'].mean()
-    
-    return price_mean, analog_count, readiness_mean
+    try:
+        price2, analog_count2, readiness2 = get_analog_price(target_row, data, max_dist=analog_dist)
+        ap.append(price2)
+        ac.append(analog_count2)
+        r.append(readiness2)
+    except Exception as e:
+        print(f"Ошибка при обработке индекса {idx}: {e}")
+        ap.append(None)
+        ac.append(None)
+        r.append(None)
+
+# Восстановление исходного индекса и удаление временного столбца 'ID'
+data.index = data['ID'].values.copy()
+data.drop('ID', axis=1, inplace=True)
+
+# Добавление рассчитанных значений в DataFrame
+data['AnalogPrice'] = ap
+data['AnalogCount'] = ac
+data['Readiness'] = r
+
+data.head()
