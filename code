@@ -1,73 +1,24 @@
-def get_analog_price(target_row, data, max_dist=5):
-    # Получение индекса текущего объекта
-    idx = target_row.index[0]
+import numpy as np
+import pandas as pd
+from tqdm import tqdm
 
-    # Преобразование координат текущего объекта в радианы
-    lat = target_row.at[idx, 'lat'] * np.pi / 180
-    lon = target_row.at[idx, 'lon'] * np.pi / 180
+# Проверка уникальных значений в столбцах
+required_columns = ['Y+Q', 'propertyClass.name', 'wallMaterial.name', 'lat', 'lon', 'parking_type', 'RegionMacro']
 
-    # Фильтрация данных: исключаем текущий объект из данных
-    analog_filter = (data['ID'] != target_row.at[idx, 'ID'])
-    analog_data = data[analog_filter].copy()
-    
-    # Преобразование координат аналогов в радианы
-    analog_data['lat_rad'] = analog_data['lat'] * np.pi / 180
-    analog_data['lon_rad'] = analog_data['lon'] * np.pi / 180
-    analog_data['DISTANCE'] = np.arccos(np.sin(lat) * np.sin(analog_data['lat_rad']) +
-                                        np.cos(lat) * np.cos(analog_data['lat_rad']) *
-                                        np.cos(analog_data['lon_rad'] - lon)) * 6371
+# Вывод уникальных значений для всех необходимых столбцов
+for col in required_columns:
+    print(f"Уникальные значения в столбце '{col}':")
+    print(data[col].unique())
 
-    # Фильтрация аналогов в пределах max_dist км
-    analogs = analog_data[analog_data['DISTANCE'] <= max_dist].copy()
-    
-    if analogs.shape[0] == 0:
-        return -1, 0, -1  # Если нет аналогов в радиусе
-
-    # Корректировка по макрорегиону
-    target_region_macro = target_row.at[idx, 'RegionMacro']
-    if target_region_macro not in ['MOS', 'SPB']:
-        if target_row.at[idx, 'propertyClass.name'] == 'Комфорт':
-            analogs['quarter_price_m2'] *= (1 + 0.1 * (analogs['propertyClass.name'] == 'Типовой'))
-        else:
-            analogs['quarter_price_m2'] /= (1 + 0.1 * (analogs['propertyClass.name'] == 'Комфорт'))
-
-    # Корректировка цен по времени
-    analogs['price_corrected'] = analogs['quarter_price_m2'] * (1.02 ** (target_row.at[idx, 'Y+Q'] - analogs['Y+Q']))
-
-    # Корректировка по типу стен
-    walls = target_row.at[idx, 'wallMaterial.name']
-    if walls in ['Монолит', 'Кирпич', 'Монолит-кирпич']:
-        analogs['price_corrected'] *= (1 + 0.1 * (1 - analogs['wallMaterial.name'].isin(['Монолит', 'Кирпич', 'Монолит-кирпич'])))
-    else:
-        analogs['price_corrected'] /= (1 + 0.1 * analogs['wallMaterial.name'].isin(['Монолит', 'Кирпич', 'Монолит-кирпич']))
-    
-    # Корректировка по классу недвижимости
-    property_class = target_row.at[idx, 'propertyClass.name']
-    if property_class == 'Комфорт':
-        analogs['price_corrected'] *= (1 + 0.1 * (analogs['propertyClass.name'] == 'Типовой'))
-    elif property_class == 'Бизнес':
-        analogs['price_corrected'] *= (1 + 0.1 * (analogs['propertyClass.name'] == 'Комфорт'))
-    else:
-        analogs['price_corrected'] /= (1 + 0.1 * (analogs['propertyClass.name'] == 'Комфорт'))
-    
-    # Корректировка по виду парковки
-    parking_type = target_row.at[idx, 'parking_type']
-    if parking_type == 'наземная' or parking_type == 'многоуровневая наземная':
-        analogs['price_corrected'] /= (1 + 0.15 * (analogs['parking_type'] == 'подземная'))
-
-    # Группировка и расчет средних значений
-    analogs = analogs.groupby('ID').mean()
-    price_mean = analogs['price_corrected'].mean()
-    analog_count = analogs.shape[0]
-    readiness_mean = analogs['ReadinessCalc'].mean()
-    
-    return price_mean, analog_count, readiness_mean
+# Преобразуем 'Y+Q' в числовой формат с обработкой ошибок
+def convert_to_numeric(value):
+    try:
+        return float(value)
+    except ValueError:
+        return np.nan
 
 # Применение функции к новому датасету
-data = data.reset_index()
-data.rename(columns={'index': 'ID'}, inplace=True)
-
-analog_dist = [5.0]
+analog_dist = 5.0
 
 ap = []
 ac = []
@@ -75,16 +26,46 @@ r = []
 
 for idx in tqdm(data.index):
     target_row = data.iloc[[idx]]
-    price2, analog_count2, readiness2 = get_analog_price(target_row, data, max_dist=analog_dist)
-    ap.append(price2)
-    ac.append(analog_count2)
-    r.append(readiness2)
+    
+    # Проверка наличия всех необходимых столбцов и их значений
+    missing_columns = [col for col in required_columns if col not in target_row.columns or pd.isna(target_row.at[idx, col])]
+    if missing_columns:
+        print(f"Отсутствующие или некорректные столбцы для индекса {idx}: {missing_columns}")
+        ap.append(None)
+        ac.append(None)
+        r.append(None)
+        continue
+    
+    # Проверка форматов значений в столбцах
+    try:
+        for col in ['lat', 'lon']:
+            target_row[col] = target_row[col].astype(float)
+    except ValueError as e:
+        print(f"Некорректные значения в столбце для индекса {idx}: {e}")
+        ap.append(None)
+        ac.append(None)
+        r.append(None)
+        continue
 
+    try:
+        price2, analog_count2, readiness2 = get_analog_price(target_row, data, max_dist=analog_dist)
+        ap.append(price2)
+        ac.append(analog_count2)
+        r.append(readiness2)
+    except Exception as e:
+        print(f"Ошибка при обработке индекса {idx}: {e}")
+        ap.append(None)
+        ac.append(None)
+        r.append(None)
+
+# Восстановление исходного индекса и удаление временного столбца 'ID'
 data.index = data['ID'].values.copy()
 data.drop('ID', axis=1, inplace=True)
 
+# Добавление рассчитанных значений в DataFrame
 data['AnalogPrice'] = ap
 data['AnalogCount'] = ac
 data['Readiness'] = r
 
 data.head()
+
