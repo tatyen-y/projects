@@ -1,57 +1,113 @@
-import pandas as pd
-from sklearn.impute import KNNImputer
-from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, confusion_matrix
 import numpy as np
-from sklearn.model_selection import train_test_split
+import pandas as pd
+from tqdm import tqdm
 
-# Пример DataFrame с данными, где известны правильные ответы
-data = {
-    'feature1': [10, 20, 30, 40, 50, 60, 70, 80, 90, 100],
-    'feature2': [5, 15, 25, 35, 45, 55, 65, 75, 85, 95],
-    'feature3': [100, 200, 300, 400, 500, 600, 700, 800, 900, 1000],
-    'parking': ['подземная', 'наземная', 'подземная', 'многоуровневая наземная', 'наземная', 'подземная', 'многоуровневая наземная', 'наземная', 'подземная', 'многоуровневая наземная']
-}
+# Определение макрорегиона
+def region_macro(region: str) -> str:
+    if region in ('Г. Москва', 'Москва', 'Москва Город', 'Город Москва'):
+        return 'MOS'
+    elif region in ('Ленинградская Область', 'Ленинградская область'):
+        return 'LEN'
+    elif region in ('Московская Область', 'Московская область'):
+        return 'OBL'
+    elif region in ('Санкт-Петербург', 'Санкт-Петербург Город', 'Город Санкт-Петербург'):
+        return 'SPB'
+    elif region in ('Краснодарский Край', 'Краснодарский край'):
+        return 'KRA'
+    elif region in ('Амурская Область', 'Амурская область', 'Бурятия Республика', 'Забайкальский Край',
+                    'Забайкальский Край', 'Приморский Край', 'Приморский край', 'Магаданская Область',
+                    'Магаданская область', 'Камчатский Край', 'Камчатский край', 'Камчатка',
+                    'Сахалинская область', 'Сахалинская Область', 'Сахалин', 'Хабаровский Край',
+                    'Хабаровский край', 'Чукотский автономный округ', 'Чукотский АО', 'Чукотка',
+                    'Саха /Якутия/ Республика', 'Якутия', 'Саха', 'Саха Республика', 'Саха республика'):
+        return 'FAR'
+    else:
+        return 'RUS'
 
-df = pd.DataFrame(data)
+def get_analog_price(obs, data, max_dist=5):
+    idx = obs.index[0]
 
-# Преобразуем категориальные значения парковки в числовые
-parking_mapping = {'наземная': 0, 'многоуровневая наземная': 1, 'подземная': 2}
-df['parking'] = df['parking'].map(parking_mapping)
+    lat = obs.at[idx, 'lat'] * np.pi / 180
+    lon = obs.at[idx, 'lon'] * np.pi / 180
 
-# Разделяем данные на обучающую и тестовую выборки
-train_df, test_df = train_test_split(df, test_size=0.3, random_state=42)
+    # Фильтрация данных
+    analog_filter = (data['ID'] != obs.at[idx, 'ID'])
+    analog_data = data[analog_filter].copy()
+    analog_data['lat_rad'] = analog_data['lat'] * np.pi / 180
+    analog_data['lon_rad'] = analog_data['lon'] * np.pi / 180
+    analog_data['DISTANCE'] = np.arccos(np.sin(lat) * np.sin(analog_data['lat_rad']) +
+                                        np.cos(lat) * np.cos(analog_data['lat_rad']) *
+                                        np.cos(analog_data['lon_rad'] - lon)) * 6371
 
-# Сохраняем истинные значения для тестовой выборки
-true_values = test_df['parking'].copy()
+    analogs = analog_data[analog_data['DISTANCE'] <= max_dist].copy()
+    
+    if analogs.shape[0] == 0:
+        return -1, 0, -1  # Если нет аналогов в радиусе
 
-# Искусственно создаем пропуски в столбце 'parking' в тестовой выборке
-test_df['parking'] = np.nan
+    # Корректировка цен по времени
+    analogs['price_corrected'] = analogs['quarter_price_m2'] * (1.02 ** (obs.at[idx, 'Y+Q'] - analogs['Y+Q']))
 
-# Объединяем обучающую и тестовую выборки для заполнения пропусков
-combined_df = pd.concat([train_df, test_df], ignore_index=True)
+    # Корректировка по типу стен
+    walls = obs.at[idx, 'wallMaterial.name']
+    if walls in ['Монолит', 'Кирпич', 'Монолит-кирпич']:
+        analogs['price_corrected'] *= (1 + 0.1 * (1 - analogs['wallMaterial.name'].isin(['Монолит', 'Кирпич', 'Монолит-кирпич'])))
+    else:
+        analogs['price_corrected'] /= (1 + 0.1 * analogs['wallMaterial.name'].isin(['Монолит', 'Кирпич', 'Монолит-кирпич']))
+    
+    # Корректировка по классу недвижимости
+    property_class = obs.at[idx, 'propertyClass.name']
+    if property_class == 'Комфорт':
+        analogs['price_corrected'] *= (1 + 0.1 * (analogs['propertyClass.name'] == 'Типовой'))
+    elif property_class == 'Бизнес':
+        analogs['price_corrected'] *= (1 + 0.1 * (analogs['propertyClass.name'] == 'Комфорт'))
+    else:
+        analogs['price_corrected'] /= (1 + 0.1 * (analogs['propertyClass.name'] == 'Комфорт'))
+    
+    # Корректировка по виду парковки
+    parking_type = obs.at[idx, 'parking_type']
+    if parking_type == 'наземная' or parking_type == 'многоуровневая наземная':
+        analogs['price_corrected'] /= (1 + 0.15 * (analogs['parking_type'] == 'подземная'))
 
-# Инициализируем KNNImputer и заполняем пропуски
-imputer = KNNImputer(n_neighbors=3)
-imputed_data = imputer.fit_transform(combined_df)
+    # Корректировка по макрорегиону
+    obs_region_macro = region_macro(obs.at[idx, 'Region'])
+    analogs['RegionMacro'] = analogs['Region'].apply(region_macro)
+    if obs_region_macro not in ['MOS', 'SPB']:
+        if obs.at[idx, 'propertyClass.name'] == 'Комфорт':
+            analogs['price_corrected'] *= (1 + 0.1 * (analogs['propertyClass.name'] == 'Типовой'))
+        else:
+            analogs['price_corrected'] /= (1 + 0.1 * (analogs['propertyClass.name'] == 'Комфорт'))
 
-# Преобразуем обратно в DataFrame и добавляем имена колонок
-imputed_df = pd.DataFrame(imputed_data, columns=combined_df.columns)
+    # Группировка и расчет средних значений
+    analogs = analogs.groupby('ID').mean()
+    price_mean = analogs['price_corrected'].mean()
+    analog_count = analogs.shape[0]
+    readiness_mean = analogs['ReadinessCalc'].mean()
+    
+    return price_mean, analog_count, readiness_mean
 
-# Преобразуем значения в столбце 'parking' обратно в дискретные
-imputed_df['parking'] = np.round(imputed_df['parking']).astype(int)
+# Применение функции к новому датасету
+data = data.reset_index()
+data.rename(columns={'index': 'ID'}, inplace=True)
 
-# Извлекаем заполненные значения для тестовой выборки
-filled_values = imputed_df.loc[test_df.index, 'parking']
+analog_dist = [5.0]
 
-# Оцениваем точность заполнения пропусков
-accuracy = accuracy_score(true_values, filled_values)
-precision = precision_score(true_values, filled_values, average='weighted')
-recall = recall_score(true_values, filled_values, average='weighted')
-f1 = f1_score(true_values, filled_values, average='weighted')
-conf_matrix = confusion_matrix(true_values, filled_values)
+ap = []
+ac = []
+r = []
 
-print(f"Точность заполнения пропусков: {accuracy:.2f}")
-print(f"Precision (Точность): {precision:.2f}")
-print(f"Recall (Полнота): {recall:.2f}")
-print(f"F1-Score: {f1:.2f}")
-print(f"Confusion Matrix:\n{conf_matrix}")
+for idx in tqdm(data.index):
+    obs = data.iloc[[idx]]
+    price2, analog_count2, readiness2 = get_analog_price(obs, data, max_dist=analog_dist)
+    ap.append(price2)
+    ac.append(analog_count2)
+    r.append(readiness2)
+
+data.index = data['ID'].values.copy()
+data.drop('ID', axis=1, inplace=True)
+
+data['AnalogPrice'] = ap
+data['AnalogCount'] = ac
+data['Readiness'] = r
+
+data.head()
+
