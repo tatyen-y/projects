@@ -1,4 +1,5 @@
-import numpy as np
+
+ import numpy as np
 import pandas as pd
 from tqdm import tqdm
 
@@ -33,6 +34,7 @@ def get_analog_price(target_row, data, max_dist=5):
         # Корректировка по типу стен
         try:
             walls = target_row.at[idx, 'wallMaterial.name']
+            print(f"Стены для индекса {idx}: {walls}")  # Отладочное сообщение
             if walls in ['Монолитный', 'Кирпичный', 'Монолитно-кирпичный']:
                 analogs['price_corrected'] *= (1 + 0.1 * (1 - analogs['wallMaterial.name'].isin(['Монолитный', 'Кирпичный', 'Монолитно-кирпичный'])))
             else:
@@ -44,6 +46,7 @@ def get_analog_price(target_row, data, max_dist=5):
         # Корректировка по классу недвижимости
         try:
             property_class = target_row.at[idx, 'propertyClass.name']
+            print(f"Класс недвижимости для индекса {idx}: {property_class}")  # Отладочное сообщение
             if property_class == 'Комфорт':
                 analogs['price_corrected'] *= (1 + 0.1 * (analogs['propertyClass.name'] == 'Типовой'))
             elif property_class == 'Бизнес':
@@ -57,6 +60,7 @@ def get_analog_price(target_row, data, max_dist=5):
         # Корректировка по виду парковки
         try:
             parking_type = target_row.at[idx, 'parking_type']
+            print(f"Вид парковки для индекса {idx}: {parking_type}")  # Отладочное сообщение
             if parking_type == 0 or parking_type == 1:  # наземная или многоуровневая наземная
                 analogs['price_corrected'] /= (1 + 0.15 * (analogs['parking_type'] == 2))  # подземная
         except Exception as e:
