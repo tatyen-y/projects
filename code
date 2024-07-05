@@ -155,4 +155,23 @@ for idx in tqdm(data.index):
 
     try:
         print(f"Обработка индекса {idx}: {target_row[['Y+Q', 'propertyClass.name', 'wallMaterial.name', 'lat', 'lon', 'parking_type', 'RegionMacro']].to_dict(orient='records')}")
-        price2, analog_count2, readiness2 = get_
+        price2, analog_count2, readiness2 = get_analog_price(target_row, data, max_dist=analog_dist)
+        ap.append(price2)
+        ac.append(analog_count2)
+        r.append(readiness2)
+    except Exception as e:
+        print(f"Ошибка при обработке индекса {idx}: {e}")
+        ap.append(None)
+        ac.append(None)
+        r.append(None)
+
+# Восстановление исходного индекса и удаление временного столбца 'ID'
+data.index = data['ID'].values.copy()
+data.drop('ID', axis=1, inplace=True)
+
+# Добавление рассчитанных значений в DataFrame
+data['AnalogPrice'] = ap
+data['AnalogCount'] = ac
+data['Readiness'] = r
+
+data.head()
