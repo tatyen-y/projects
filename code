@@ -1,7 +1,27 @@
-
- import numpy as np
+import numpy as np
 import pandas as pd
 from tqdm import tqdm
+
+def region_macro(region: str) -> str:
+    if region in ('Г. Москва', 'Москва', 'Москва Город', 'Город Москва'):
+        return 'MOS'
+    elif region in ('Ленинградская Область', 'Ленинградская область'):
+        return 'LEN'
+    elif region in ('Московская Область', 'Московская область'):
+        return 'OBL'
+    elif region in ('Санкт-Петербург', 'Санкт-Петербург Город', 'Город Санкт-Петербург'):
+        return 'SPB'
+    elif region in ('Краснодарский Край', 'Краснодарский край'):
+        return 'KRA'
+    elif region in ('Амурская Область', 'Амурская область', 'Бурятия Республика', 'Забайкальский Край',
+                    'Забайкальский Край', 'Приморский Край', 'Приморский край', 'Магаданская Область',
+                    'Магаданская область', 'Камчатский Край', 'Камчатский край', 'Камчатка',
+                    'Сахалинская область', 'Сахалинская Область', 'Сахалин', 'Хабаровский Край',
+                    'Хабаровский край', 'Чукотский автономный округ', 'Чукотский АО', 'Чукотка',
+                    'Саха /Якутия/ Республика', 'Якутия', 'Саха', 'Саха Республика', 'Саха республика'):
+        return 'FAR'
+    else:
+        return 'RUS'
 
 def get_analog_price(target_row, data, max_dist=5):
     try:
@@ -67,6 +87,19 @@ def get_analog_price(target_row, data, max_dist=5):
             print(f"Ошибка корректировки по виду парковки для индекса {idx}: {e}")
             return None, None, None
 
+        # Корректировка по макрорегиону
+        try:
+            obs_region_macro = target_row.at[idx, 'RegionMacro']
+            analogs['RegionMacro'] = analogs['Region'].apply(region_macro)
+            if obs_region_macro not in ['MOS', 'SPB']:
+                if target_row.at[idx, 'propertyClass.name'] == 'Комфорт':
+                    analogs['price_corrected'] *= (1 + 0.1 * (analogs['propertyClass.name'] == 'Типовой'))
+                else:
+                    analogs['price_corrected'] /= (1 + 0.1 * (analogs['propertyClass.name'] == 'Комфорт'))
+        except Exception as e:
+            print(f"Ошибка корректировки по макрорегиону для индекса {idx}: {e}")
+            return None, None, None
+
         analogs = analogs.groupby('ID').mean()
         price_mean = analogs['price_corrected'].mean()
         analog_count = analogs.shape[0]
@@ -78,6 +111,7 @@ def get_analog_price(target_row, data, max_dist=5):
         return None, None, None
 
 # Применение функции к новому датасету
+data = data[['Y+Q', 'propertyClass.name', 'wallMaterial.name', 'lat', 'lon', 'parking_type', 'quarter_price_m2', 'Region']]
 data = data.reset_index(drop=True)
 data['ID'] = data.index
 
@@ -85,13 +119,16 @@ data['ID'] = data.index
 if data['ID'].duplicated().any():
     print("Внимание: найдены дублирующиеся значения в столбце 'ID'.")
 
+# Преобразование макрорегиона
+data['RegionMacro'] = data['Region'].apply(region_macro)
+
 analog_dist = 5.0
 
 ap = []
 ac = []
 r = []
 
-required_columns = ['Y+Q', 'propertyClass.name', 'wallMaterial.name', 'lat', 'lon', 'parking_type']
+required_columns = ['Y+Q', 'propertyClass.name', 'wallMaterial.name', 'lat', 'lon', 'parking_type', 'quarter_price_m2', 'RegionMacro']
 
 for idx in tqdm(data.index):
     target_row = data.iloc[[idx]]
@@ -117,23 +154,5 @@ for idx in tqdm(data.index):
         continue
 
     try:
-        price2, analog_count2, readiness2 = get_analog_price(target_row, data, max_dist=analog_dist)
-        ap.append(price2)
-        ac.append(analog_count2)
-        r.append(readiness2)
-    except Exception as e:
-        print(f"Ошибка при обработке индекса {idx}: {e}")
-        ap.append(None)
-        ac.append(None)
-        r.append(None)
-
-# Восстановление исходного индекса и удаление временного столбца 'ID'
-data.index = data['ID'].values.copy()
-data.drop('ID', axis=1, inplace=True)
-
-# Добавление рассчитанных значений в DataFrame
-data['AnalogPrice'] = ap
-data['AnalogCount'] = ac
-data['Readiness'] = r
-
-data.head()
+        print(f"Обработка индекса {idx}: {target_row[['Y+Q', 'propertyClass.name', 'wallMaterial.name', 'lat', 'lon', 'parking_type', 'RegionMacro']].to_dict(orient='records')}")
+        price2, analog_count2, readiness2 = get_
