@@ -1,4 +1,88 @@
-# Удаление дубликатов по индексу и проверка данных
+def get_analog_price(target_row, data, max_dist=5):
+    try:
+        idx = target_row.index[0]
+        lat = target_row.at[idx, 'lat'] * np.pi / 180
+        lon = target_row.at[idx, 'lon'] * np.pi / 180
+
+        # Фильтрация данных: исключаем текущий объект из данных
+        analog_filter = (data['ID'] != target_row.at[idx, 'ID'])
+        analog_data = data[analog_filter].copy()
+
+        analog_data['lat_rad'] = analog_data['lat'] * np.pi / 180
+        analog_data['lon_rad'] = analog_data['lon'] * np.pi / 180
+        analog_data['DISTANCE'] = np.arccos(np.sin(lat) * np.sin(analog_data['lat_rad']) +
+                                            np.cos(lat) * np.cos(analog_data['lat_rad']) *
+                                            np.cos(analog_data['lon_rad'] - lon)) * 6371
+
+        analogs = analog_data[analog_data['DISTANCE'] <= max_dist].copy()
+        
+        if analogs.shape[0] == 0:
+            return -1, 0, -1
+
+        # Привязка к макрорегиону
+        try:
+            target_region_macro = target_row.at[idx, 'RegionMacro']
+            analogs['RegionMacro'] = analogs['RegionMacro']  # Ensure we're working with the correct column
+            if target_region_macro not in ['MOS', 'SPB']:
+                if target_row.at[idx, 'propertyClass.name'] == 'Комфорт':
+                    analogs['quarter_price_m2'] *= (1 + 0.1 * (analogs['propertyClass.name'] == 'Типовой'))
+                else:
+                    analogs['quarter_price_m2'] /= (1 + 0.1 * (analogs['propertyClass.name'] == 'Комфорт'))
+        except Exception as e:
+            print(f"Ошибка привязки к макрорегиону для индекса {idx}: {e}")
+            return None, None, None
+
+        # Корректировка цен по времени
+        try:
+            analogs['price_corrected'] = analogs['quarter_price_m2'] * (1.02 ** (target_row.at[idx, 'Y+Q'] - analogs['Y+Q']))
+        except Exception as e:
+            print(f"Ошибка корректировки цен по времени для индекса {idx}: {e}")
+            return None, None, None
+
+        # Корректировка по типу стен
+        try:
+            walls = target_row.at[idx, 'wallMaterial.name']
+            if walls in ['Монолитный', 'Кирпичный', 'Монолитно-кирпичный']:
+                analogs['price_corrected'] *= (1 + 0.1 * (1 - analogs['wallMaterial.name'].isin(['Монолитный', 'Кирпичный', 'Монолитно-кирпичный'])))
+            else:
+                analogs['price_corrected'] /= (1 + 0.1 * analogs['wallMaterial.name'].isin(['Монолитный', 'Кирпичный', 'Монолитно-кирпичный']))
+        except Exception as e:
+            print(f"Ошибка корректировки по типу стен для индекса {idx}: {e}")
+            return None, None, None
+        
+        # Корректировка по классу недвижимости
+        try:
+            property_class = target_row.at[idx, 'propertyClass.name']
+            if property_class == 'Комфорт':
+                analogs['price_corrected'] *= (1 + 0.1 * (analogs['propertyClass.name'] == 'Типовой'))
+            elif property_class == 'Бизнес':
+                analogs['price_corrected'] *= (1 + 0.1 * (analogs['propertyClass.name'] == 'Комфорт'))
+            else:
+                analogs['price_corrected'] /= (1 + 0.1 * (analogs['propertyClass.name'] == 'Комфорт'))
+        except Exception as e:
+            print(f"Ошибка корректировки по классу недвижимости для индекса {idx}: {e}")
+            return None, None, None
+        
+        # Корректировка по виду парковки
+        try:
+            parking_type = target_row.at[idx, 'parking_type']
+            if parking_type == 0 or parking_type == 1:  # наземная или многоуровневая наземная
+                analogs['price_corrected'] /= (1 + 0.15 * (analogs['parking_type'] == 2))  # подземная
+        except Exception as e:
+            print(f"Ошибка корректировки по виду парковки для индекса {idx}: {e}")
+            return None, None, None
+
+        analogs = analogs.groupby('ID').mean()
+        price_mean = analogs['price_corrected'].mean()
+        analog_count = analogs.shape[0]
+        readiness_mean = analogs['ReadinessCalc'].mean()
+        
+        return price_mean, analog_count, readiness_mean
+    except Exception as e:
+        print(f"Ошибка при обработке индекса {idx}: {e}")
+        return None, None, None
+
+# Применение функции к новому датасету
 data = data.reset_index(drop=True)
 data['ID'] = data.index
 
@@ -6,7 +90,6 @@ data['ID'] = data.index
 if data['ID'].duplicated().any():
     print("Внимание: найдены дублирующиеся значения в столбце 'ID'.")
 
-# Применение функции к новому датасету
 analog_dist = 5.0
 
 ap = []
