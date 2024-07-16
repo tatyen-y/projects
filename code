@@ -1,57 +1,29 @@
-def get_regional_price(self, target_row, data):
-        try:
-            idx = target_row.index[0]
-            target_region = target_row.at[idx, 'Region']
-            target_id = target_row.at[idx, 'ID']
-            target_object_id = target_row.at[idx, 'objectId']
-            target_date = target_row.at[idx, 'Sales_date']
+from functions.df_functions import Analogs
+from tqdm import tqdm
 
-            # Фильтрация данных: оставляем только записи из того же региона, даты меньше текущей и исключаем текущий объект
-            regional_filter = (data['Region'] == target_region) & (data['Sales_date'] <= target_date) & (data['ID'] != target_id) & (data['objectId'] != target_object_id)
-            regional_data = data[regional_filter].copy()
+# создаем объект класса
+processor = Analogs()
 
-            # если не найдены аналоги
-            if regional_data.shape[0] == 0:
-                return -1, -1
+# скидываем индексы, чтобы убрать возможные дубли и упорядочить
+df = df.reset_index(drop=True)
+df['ID'] = df.index
 
-            # Корректировка цен по времени
-            regional_data['quarter_diff'] = regional_data['Sales_date'].apply(lambda x: self.calculate_quarter_diff(target_date, x))
-            regional_data['price_corrected'] = regional_data['price'] * (1.02 ** regional_data['quarter_diff'])
+# создаем списки для значений будущих столбцов
+regional_price = []
+regional_readiness = []
 
-            # Корректировка по типу стен
-            wall_material = target_row.at[idx, 'wallMaterial.name']
-            if wall_material in ['Монолитный', 'Кирпичный', 'Монолитно-кирпичный']:
-                regional_data.loc[~regional_data['wallMaterial.name'].isin(['Монолитный', 'Кирпичный', 'Монолитно-кирпичный']), 'price_corrected'] *= 1.1
-            else:
-                regional_data.loc[regional_data['wallMaterial.name'].isin(['Монолитный', 'Кирпичный', 'Монолитно-кирпичный']), 'price_corrected'] /= 1.1
+# проходим по датасету, ищем региональные цены и генерим значения
+for idx in tqdm(df.index):
+    target_row = df.iloc[[idx]]  # Получаем строку данных для текущего индекса
+    price_mean, readiness_mean = processor.get_regional_price(target_row, df)
+    regional_price.append(price_mean)
+    regional_readiness.append(readiness_mean)
 
-            # Корректировка по классу недвижимости
-            property_class = target_row.at[idx, 'propertyClass.name']
-            if property_class == 'Типовой':
-                regional_data['price_corrected'] *= 1.1
-            else:
-                regional_data['price_corrected'] /= 1.1
+# Добавляем результаты в DataFrame
+df['regional_price'] = regional_price
+df['regional_readiness'] = regional_readiness
 
-            # Корректировка по виду парковки
-            parking_type = target_row.at[idx, 'parking_type']
-            if parking_type in ['наземная', 'многоуровневая наземная']:
-                regional_data.loc[regional_data['parking_type'] == 'подземная', 'price_corrected'] *= 1.15
-            elif parking_type == 'подземная':
-                regional_data.loc[regional_data['parking_type'] == 'наземная', 'price_corrected'] /= 1.15
-                regional_data.loc[regional_data['parking_type'] == 'многоуровневая наземная', 'price_corrected'] /= 1.15
+# Сохраняем обновленный DataFrame
+df.to_excel('updated_dataset_with_regional_prices.xlsx', index=False)
 
-            # Корректировка по макрорегиону
-            target_region_macro = target_row.at[idx, 'RegionMacro']
-            if target_region_macro not in ['MOS', 'SPB']:
-                if target_row.at[idx, 'propertyClass.name'] in ['Комфорт', 'Бизнес']:
-                    regional_data.loc[regional_data['propertyClass.name'] == 'Типовой', 'price_corrected'] *= 1.1
-                else:
-                    regional_data.loc[regional_data['propertyClass.name'].isin(['Комфорт', 'Бизнес']), 'price_corrected'] /= 1.1
-
-            price_mean = regional_data['price_corrected'].mean()
-            readiness_mean = regional_data['Readiness'].mean()
-
-            return price_mean, readiness_mean
-        except Exception as e:
-            print(f"Ошибка при обработке индекса {idx}: {e}")
-            return None, None
+print("Процесс завершен!")
