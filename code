@@ -1,45 +1,93 @@
 import requests
-import base64
-import uuid
+import json
 
-# Ваши Client ID и Secret
-client_id = 'b439a2ff-21cd-4525-806c-d6f527d90a91'
-secret = 'YjQzOWEyZmYtMjFjZC00NTI1LTgwNmMtZDZmNTI3ZDkwYTkxOmUzZWE0NmU0LWI1MTItNDZmOS1iMGIyLWVkOWU0NGE1Y2Y3Mg'
+# Ваш токен доступа (уже получен и сохранен в переменной giga_token)
+# Пример: giga_token = 'полученный_токен_здесь'
 
-# Кодирование учетных данных
-credentials = f"{client_id}:{secret}"
-encoded_credentials = base64.b64encode(credentials.encode('utf-8')).decode('utf-8')
+# История диалога для контекста
+conversation_history = [{
+    'role': 'system',
+    'content': 'Вы выступаете в роли эксперта по географии. Ваша задача — на основе названия города выбрать наиболее подходящий регион из предоставленного списка регионов. Вам нужно учитывать семантическое значение названия города и правильно сопоставить его с соответствующим регионом.'
+}]
 
-def get_token(auth_token, scope='GIGACHAT_API_PERS'):
-    rq_uid = str(uuid.uuid4())  # Генерация уникального идентификатора запроса
+# Список регионов
+regions_list = [
+    'Алматы', 'Акмолинская область', 'Шымкент', 
+    'Карагандинская область', 'Ставропольский край', 'Москва'
+]
 
-    url = "https://ngw.devices.sberbank.ru:9443/api/v2/oauth"
+def get_chat_completion(auth_token: str, city_name: str, regions_list: list, conversation_history=None):
+    """
+    Отправляет POST-запрос к API чата для получения ответа от модели GigaChat в рамках диалога.
+
+    Параметры:
+    - auth_token (str): токен авторизации.
+    - city_name (str): Название города, для которого нужно найти соответствующий регион.
+    - regions_list (list): Список регионов для сопоставления.
+    - conversation_history (list): История диалога в виде списка сообщений (опционально).
+
+    Возвращает:
+    - response_content (str): Ответ от GigaChat, текст.
+    - conversation_history (list): Обновленная история диалога.
+    """
+    url = "https://gigachat.devices.sberbank.ru/api/v1/chat/completions"
+
+    if conversation_history is None:
+        conversation_history = []
+
+    # Формирование текста запроса
+    regions_str = ", ".join(regions_list)
+    user_message = f"Город: {city_name}\nРегионы: {regions_str}\nВыберите наиболее подходящий регион для города."
+
+    # Добавление сообщения пользователя в историю диалога
+    conversation_history.append({
+        "role": "user",
+        "content": user_message
+    })
+
+    # Формирование payload для запроса
+    payload = json.dumps({
+        "model": "GigaChat:latest",
+        "messages": conversation_history,
+        "temperature": 0.7,
+        "top_p": 0.9,
+        "n": 1,
+        "stream": False,
+        "repetition_penalty": 1,
+        "update_interval": 0
+    })
 
     headers = {
-        'Content-Type': 'application/x-www-form-urlencoded',
+        'Content-Type': 'application/json',
         'Accept': 'application/json',
-        'RqUID': rq_uid,
-        'Authorization': f'Basic {auth_token}'
-    }
-
-    payload = {
-        'scope': scope
+        'Authorization': f'Bearer {auth_token}'
     }
 
     try:
-        response = requests.post(url, headers=headers, data=payload, verify=False)  # Отключение проверки SSL-сертификата
-        response.raise_for_status()  # Проверка на успешность запроса
-        return response
+        # Отправка POST-запроса
+        response = requests.post(url, headers=headers, data=payload, verify=False)
+        response.raise_for_status()
+        response_data = response.json()
+
+        # Извлечение и возврат ответа
+        response_content = response_data['choices'][0]['message']['content'].strip()
+
+        # Добавление ответа ассистента в историю диалога
+        conversation_history.append({
+            "role": "assistant",
+            "content": response_content
+        })
+
+        return response_content, conversation_history
     except requests.RequestException as e:
-        print(f"Ошибка: {str(e)}")
-        return -1
+        print(f"Произошла ошибка: {str(e)}")
+        return None, conversation_history
 
-# Запрос на получение токена
-response = get_token(encoded_credentials)
+# Тестовая строка: "г. Чехов, Московская область"
+city_name = "г. Чехов, Московская область"
 
-if response != -1:
-    print("Токен успешно получен!")
-    print(response.text)
-    giga_token = response.json()['access_token']
-else:
-    print("Не удалось получить токен.")
+# Получаем ответ от GigaChat
+region, updated_history = get_chat_completion(giga_token, city_name, regions_list, conversation_history)
+
+# Выводим результат
+print("Наиболее подходящий регион:", region)
