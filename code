@@ -1,29 +1,55 @@
-from functions.df_functions import Analogs
-from tqdm import tqdm
+import requests
+import base64
+import uuid
 
-# создаем объект класса
-processor = Analogs()
+# Ваши Client ID и Secret
+client_id = 'b439a2ff-21cd-4525-806c-d6f527d90a91'
+secret = 'YjQzOWEyZmYtMjFjZC00NTI1LTgwNmMtZDZmNTI3ZDkwYTkxOmUzZWE0NmU0LWI1MTItNDZmOS1iMGIyLWVkOWU0NGE1Y2Y3Mg'
 
-# скидываем индексы, чтобы убрать возможные дубли и упорядочить
-df = df.reset_index(drop=True)
-df['ID'] = df.index
+# Кодирование учетных данных
+credentials = f"{client_id}:{secret}"
+encoded_credentials = base64.b64encode(credentials.encode('utf-8')).decode('utf-8')
 
-# создаем списки для значений будущих столбцов
-regional_price = []
-regional_readiness = []
+def get_token(auth_token, scope='GIGACHAT_API_PERS'):
+    """
+    Выполняет POST-запрос к эндпоинту, который выдает токен.
 
-# проходим по датасету, ищем региональные цены и генерим значения
-for idx in tqdm(df.index):
-    target_row = df.iloc[[idx]]  # Получаем строку данных для текущего индекса
-    price_mean, readiness_mean = processor.get_regional_price(target_row, df)
-    regional_price.append(price_mean)
-    regional_readiness.append(readiness_mean)
+    Параметры:
+    - auth_token (str): токен авторизации, необходимый для запроса.
+    - scope (str): область действия запроса API. По умолчанию — «GIGACHAT_API_PERS».
 
-# Добавляем результаты в DataFrame
-df['regional_price'] = regional_price
-df['regional_readiness'] = regional_readiness
+    Возвращает:
+    - Ответ API, содержащий токен и срок его действия.
+    """
+    rq_uid = str(uuid.uuid4())  # Генерация уникального идентификатора запроса
 
-# Сохраняем обновленный DataFrame
-df.to_excel('updated_dataset_with_regional_prices.xlsx', index=False)
+    url = "https://ngw.devices.sberbank.ru:9443/api/v2/oauth"
 
-print("Процесс завершен!")
+    headers = {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Accept': 'application/json',
+        'RqUID': rq_uid,
+        'Authorization': f'Basic {auth_token}'
+    }
+
+    payload = {
+        'scope': scope
+    }
+
+    try:
+        response = requests.post(url, headers=headers, data=payload)
+        response.raise_for_status()  # Проверка на успешность запроса
+        return response
+    except requests.RequestException as e:
+        print(f"Ошибка: {str(e)}")
+        return -1
+
+# Запрос на получение токена
+response = get_token(encoded_credentials)
+
+if response != -1:
+    print("Токен успешно получен!")
+    print(response.text)
+    giga_token = response.json()['access_token']
+else:
+    print("Не удалось получить токен.")
