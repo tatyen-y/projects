@@ -1,93 +1,97 @@
-import requests
-import json
-
-# Ваш токен доступа (уже получен и сохранен в переменной giga_token)
-# Пример: giga_token = 'полученный_токен_здесь'
-
-# История диалога для контекста
-conversation_history = [{
-    'role': 'system',
-    'content': 'Вы выступаете в роли эксперта по географии. Ваша задача — на основе названия города выбрать наиболее подходящий регион из предоставленного списка регионов. Вам нужно учитывать семантическое значение названия города и правильно сопоставить его с соответствующим регионом.'
-}]
-
-# Список регионов
-regions_list = [
-    'Алматы', 'Акмолинская область', 'Шымкент', 
-    'Карагандинская область', 'Ставропольский край', 'Москва'
-]
-
-def get_chat_completion(auth_token: str, city_name: str, regions_list: list, conversation_history=None):
-    """
-    Отправляет POST-запрос к API чата для получения ответа от модели GigaChat в рамках диалога.
-
-    Параметры:
-    - auth_token (str): токен авторизации.
-    - city_name (str): Название города, для которого нужно найти соответствующий регион.
-    - regions_list (list): Список регионов для сопоставления.
-    - conversation_history (list): История диалога в виде списка сообщений (опционально).
-
-    Возвращает:
-    - response_content (str): Ответ от GigaChat, текст.
-    - conversation_history (list): Обновленная история диалога.
-    """
-    url = "https://gigachat.devices.sberbank.ru/api/v1/chat/completions"
-
-    if conversation_history is None:
-        conversation_history = []
-
-    # Формирование текста запроса
-    regions_str = ", ".join(regions_list)
-    user_message = f"Город: {city_name}\nРегионы: {regions_str}\nВыберите наиболее подходящий регион для города."
-
-    # Добавление сообщения пользователя в историю диалога
-    conversation_history.append({
-        "role": "user",
-        "content": user_message
-    })
-
-    # Формирование payload для запроса
-    payload = json.dumps({
-        "model": "GigaChat:latest",
-        "messages": conversation_history,
-        "temperature": 0.7,
-        "top_p": 0.9,
-        "n": 1,
-        "stream": False,
-        "repetition_penalty": 1,
-        "update_interval": 0
-    })
-
-    headers = {
-        'Content-Type': 'application/json',
-        'Accept': 'application/json',
-        'Authorization': f'Bearer {auth_token}'
-    }
-
+def get_analog_price(target_row, data, max_dist):
     try:
-        # Отправка POST-запроса
-        response = requests.post(url, headers=headers, data=payload, verify=False)
-        response.raise_for_status()
-        response_data = response.json()
+        idx = target_row.index[0]
+        lat = target_row.at[idx, 'lat'] * np.pi / 180
+        lon = target_row.at[idx, 'lon'] * np.pi / 180
 
-        # Извлечение и возврат ответа
-        response_content = response_data['choices'][0]['message']['content'].strip()
+        # Фильтрация данных: исключаем все записи с текущим ID и objectId объекта из данных
+        target_id = target_row.at[idx, 'ID']
+        target_object_id = target_row.at[idx, 'objectId']
+        target_date = target_row.at[idx, 'date_fact']
 
-        # Добавление ответа ассистента в историю диалога
-        conversation_history.append({
-            "role": "assistant",
-            "content": response_content
-        })
+        analog_filter = (data['ID'] != target_id) & (data['objectId'] != target_object_id) & (data['date_fact'] <= target_date)
+        analog_data = data[analog_filter].copy()
 
-        return response_content, conversation_history
-    except requests.RequestException as e:
-        print(f"Произошла ошибка: {str(e)}")
-        return None, conversation_history
+        # Ищем расстояние до объекта аналога
+        analog_data['lat_rad'] = analog_data['lat'] * np.pi / 180
+        analog_data['lon_rad'] = analog_data['lon'] * np.pi / 180
+        analog_data['DISTANCE'] = np.arccos(np.sin(lat) * np.sin(analog_data['lat_rad']) +
+                                            np.cos(lat) * np.cos(analog_data['lat_rad']) *
+                                            np.cos(analog_data['lon_rad'] - lon)) * 6371
 
-# Тестовая строка: "г. Чехов, Московская область"
-city_name = "г. Чехов, Московская область"
+        # Оставляем только в нужном радиусе
+        analogs = analog_data[analog_data['DISTANCE'] <= max_dist].copy()
 
-# Получаем ответ от GigaChat
-region, updated_history = get_chat_completion(giga_token, city_name, regions_list, conversation_history)
+        # если не найдены аналоги
+        if analogs.shape[0] == 0:
+            return -1, 0, -1
 
-# Выводим результат
-print("Наиболее подходящий регион:", region)
+        # Корректировка цен по времени
+        analogs['quarter_diff'] = analogs['date_fact'].apply(lambda x: calculate_quarter_diff(target_date, x))
+        analogs['price_corrected'] = analogs['quarter_price_m2'] * (1.02 ** analogs['quarter_diff'])  # корректируем накопительно поквартально
+
+        # корректировка по площади
+        target_square = target_row.at[idx, 'quarter_square']
+        target_area = target_row.at[idx, 'area_category']
+        # если объект до 20 кв. м, а аналоги больше
+        if target_area in ['5-10', '10-15', '15-20']:
+            analogs.loc[analogs['area_category'] == '20-25', 'price_corrected'] *= 1.1
+            analogs.loc[analogs['area_category'] == '25-30', 'price_corrected'] *= 1.2
+        elif target_area == '20-25':
+            analogs.loc[analogs['area_category'] == '25-30', 'price_corrected'] *= 1.2
+            analogs.loc[analogs['area_category'].isin(['5-10', '10-15', '15-20']), 'price_corrected'] /= 1.1
+        elif target_area == '25-30':
+            analogs.loc[analogs['area_category'] == '20-25', 'price_corrected'] /= 1.2
+            analogs.loc[analogs['area_category'].isin(['5-10', '10-15', '15-20']), 'price_corrected'] /= 1.2
+
+        # Корректировка по виду парковки
+        parking_type = target_row.at[idx, 'parking_type']
+        if parking_type in ['наземная', 'многоуровневая наземная']:
+            analogs.loc[analogs['parking_type'].isin(['подземная', 'встроенно-пристроенная']), 'price_corrected'] /= 1.1
+        elif parking_type in ['подземная', 'встроенно-пристроенная']:
+            analogs.loc[analogs['parking_type'] == 'наземная', 'price_corrected'] *= 1.1
+            analogs.loc[analogs['parking_type'] == 'многоуровневая наземная', 'price_corrected'] *= 1.1
+
+        # Корректировка по стоимости жилой
+        target_region_macro = target_row.at[idx, 'MacroRegion']
+        if target_region_macro != 'Северо-Кавказский':
+            if target_row.at[idx, 'Is_live'] == 1:
+                analogs.loc[analogs['Is_live'] == 0, 'price_corrected'] *= 1.15
+            else:
+                analogs.loc[analogs['Is_live'] == 1, 'price_corrected'] /= 1.15
+
+        # Корректировка по макрорегиону
+        if target_region_macro != 'Центральный':
+            if target_row.at[idx, 'propertyClass.name'] == 'Типовой':
+                analogs.loc[analogs['propertyClass.name'] == 'Комфорт', 'price_corrected'] /= 1.1
+                analogs.loc[analogs['propertyClass.name'] == 'Бизнес', 'price_corrected'] /= 1.3
+            elif target_row.at[idx, 'propertyClass.name'] == 'Комфорт':
+                analogs.loc[analogs['propertyClass.name'] == 'Типовой', 'price_corrected'] *= 1.1
+                analogs.loc[analogs['propertyClass.name'] == 'Бизнес', 'price_corrected'] /= 1.2
+            elif target_row.at[idx, 'propertyClass.name'] == 'Бизнес':
+                analogs.loc[analogs['propertyClass.name'] == 'Типовой', 'price_corrected'] *= 1.3
+                analogs.loc[analogs['propertyClass.name'] == 'Комфорт', 'price_corrected'] *= 1.2
+        else:  # для центрального региона
+            if target_row.at[idx, 'propertyClass.name'] in ['Типовой', 'Комфорт']:
+                analogs.loc[analogs['propertyClass.name'] == 'Бизнес', 'price_corrected'] /= 1.3
+            if target_row.at[idx, 'propertyClass.name'] == 'Бизнес':
+                analogs.loc[analogs['propertyClass.name'].isin(['Типовой', 'Комфорт']), 'price_corrected'] *= 1.3
+
+        # Удаление объектов, которые на 50% меньше или больше медианы
+        median_price = analogs['price_corrected'].median()
+        analogs = analogs[(analogs['price_corrected'] >= median_price * 0.5) & 
+                          (analogs['price_corrected'] <= median_price * 1.5)]
+
+        # Проверяем снова, есть ли аналоги после фильтрации
+        if analogs.shape[0] == 0:
+            return -1, 0, -1
+
+        # Находим итоговые значения
+        price_mean = analogs['price_corrected'].mean()
+        analog_count = analogs.shape[0]
+        readiness_mean = analogs['Readiness'].mean()
+
+        return price_mean, analog_count, readiness_mean
+    except Exception as e:
+        print(f"Ошибка при обработке индекса {idx}: {e}")
+        return None, None, None
