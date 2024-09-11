@@ -1,97 +1,76 @@
-def get_analog_price(target_row, data, max_dist):
-    try:
-        idx = target_row.index[0]
-        lat = target_row.at[idx, 'lat'] * np.pi / 180
-        lon = target_row.at[idx, 'lon'] * np.pi / 180
+import pandas as pd
+import numpy as np
 
-        # Фильтрация данных: исключаем все записи с текущим ID и objectId объекта из данных
-        target_id = target_row.at[idx, 'ID']
-        target_object_id = target_row.at[idx, 'objectId']
-        target_date = target_row.at[idx, 'date_fact']
+# Предположим, что у вас уже есть DataFrame data с колонками 'region', 'distance_to_center' и 'price'
 
-        analog_filter = (data['ID'] != target_id) & (data['objectId'] != target_object_id) & (data['date_fact'] <= target_date)
-        analog_data = data[analog_filter].copy()
+def remove_outliers(df):
+    removed_counts = {}
 
-        # Ищем расстояние до объекта аналога
-        analog_data['lat_rad'] = analog_data['lat'] * np.pi / 180
-        analog_data['lon_rad'] = analog_data['lon'] * np.pi / 180
-        analog_data['DISTANCE'] = np.arccos(np.sin(lat) * np.sin(analog_data['lat_rad']) +
-                                            np.cos(lat) * np.cos(analog_data['lat_rad']) *
-                                            np.cos(analog_data['lon_rad'] - lon)) * 6371
-
-        # Оставляем только в нужном радиусе
-        analogs = analog_data[analog_data['DISTANCE'] <= max_dist].copy()
-
-        # если не найдены аналоги
-        if analogs.shape[0] == 0:
-            return -1, 0, -1
-
-        # Корректировка цен по времени
-        analogs['quarter_diff'] = analogs['date_fact'].apply(lambda x: calculate_quarter_diff(target_date, x))
-        analogs['price_corrected'] = analogs['quarter_price_m2'] * (1.02 ** analogs['quarter_diff'])  # корректируем накопительно поквартально
-
-        # корректировка по площади
-        target_square = target_row.at[idx, 'quarter_square']
-        target_area = target_row.at[idx, 'area_category']
-        # если объект до 20 кв. м, а аналоги больше
-        if target_area in ['5-10', '10-15', '15-20']:
-            analogs.loc[analogs['area_category'] == '20-25', 'price_corrected'] *= 1.1
-            analogs.loc[analogs['area_category'] == '25-30', 'price_corrected'] *= 1.2
-        elif target_area == '20-25':
-            analogs.loc[analogs['area_category'] == '25-30', 'price_corrected'] *= 1.2
-            analogs.loc[analogs['area_category'].isin(['5-10', '10-15', '15-20']), 'price_corrected'] /= 1.1
-        elif target_area == '25-30':
-            analogs.loc[analogs['area_category'] == '20-25', 'price_corrected'] /= 1.2
-            analogs.loc[analogs['area_category'].isin(['5-10', '10-15', '15-20']), 'price_corrected'] /= 1.2
-
-        # Корректировка по виду парковки
-        parking_type = target_row.at[idx, 'parking_type']
-        if parking_type in ['наземная', 'многоуровневая наземная']:
-            analogs.loc[analogs['parking_type'].isin(['подземная', 'встроенно-пристроенная']), 'price_corrected'] /= 1.1
-        elif parking_type in ['подземная', 'встроенно-пристроенная']:
-            analogs.loc[analogs['parking_type'] == 'наземная', 'price_corrected'] *= 1.1
-            analogs.loc[analogs['parking_type'] == 'многоуровневая наземная', 'price_corrected'] *= 1.1
-
-        # Корректировка по стоимости жилой
-        target_region_macro = target_row.at[idx, 'MacroRegion']
-        if target_region_macro != 'Северо-Кавказский':
-            if target_row.at[idx, 'Is_live'] == 1:
-                analogs.loc[analogs['Is_live'] == 0, 'price_corrected'] *= 1.15
+    def filter_condition(row):
+        region = row['region']
+        distance = row['distance_to_center']
+        
+        # Устанавливаем коэффициенты в зависимости от региона
+        if region == 'Москва':
+            if distance <= 5:
+                multiplier = 1.5
+            elif distance <= 10:
+                multiplier = 1.0
+            elif distance <= 15:
+                multiplier = 0.7
             else:
-                analogs.loc[analogs['Is_live'] == 1, 'price_corrected'] /= 1.15
+                multiplier = 0.4
+        elif region == 'Санкт-Петербург':
+            if distance <= 5:
+                multiplier = 1.3
+            elif distance <= 10:
+                multiplier = 0.9
+            elif distance <= 15:
+                multiplier = 0.6
+            else:
+                multiplier = 0.3
+        else:  # Для остальных городов
+            if distance <= 5:
+                multiplier = 1.2
+            elif distance <= 10:
+                multiplier = 0.8
+            elif distance <= 15:
+                multiplier = 0.5
+            else:
+                multiplier = 0.2
+        
+        # Вычисляем квартильные значения и IQR для текущего региона
+        region_data = df[df['region'] == region]
+        Q1 = region_data['price'].quantile(0.25)
+        Q3 = region_data['price'].quantile(0.75)
+        IQR = Q3 - Q1
+        
+        # Вычисляем границы для удаления аномалий
+        lower_bound = Q1 - (multiplier * IQR)
+        upper_bound = Q3 + (multiplier * IQR)
+        
+        return lower_bound <= row['price'] <= upper_bound
+    
+    # Применяем фильтр к данным и считаем количество удаленных строк по каждому региону
+    for region in df['region'].unique():
+        region_df = df[df['region'] == region]
+        initial_count = len(region_df)
+        filtered_region_df = region_df[region_df.apply(filter_condition, axis=1)]
+        final_count = len(filtered_region_df)
+        
+        removed_counts[region] = initial_count - final_count
+    
+    # Применяем фильтр ко всему датасету
+    filtered_df = df[df.apply(filter_condition, axis=1)]
+    
+    return filtered_df, removed_counts
 
-        # Корректировка по макрорегиону
-        if target_region_macro != 'Центральный':
-            if target_row.at[idx, 'propertyClass.name'] == 'Типовой':
-                analogs.loc[analogs['propertyClass.name'] == 'Комфорт', 'price_corrected'] /= 1.1
-                analogs.loc[analogs['propertyClass.name'] == 'Бизнес', 'price_corrected'] /= 1.3
-            elif target_row.at[idx, 'propertyClass.name'] == 'Комфорт':
-                analogs.loc[analogs['propertyClass.name'] == 'Типовой', 'price_corrected'] *= 1.1
-                analogs.loc[analogs['propertyClass.name'] == 'Бизнес', 'price_corrected'] /= 1.2
-            elif target_row.at[idx, 'propertyClass.name'] == 'Бизнес':
-                analogs.loc[analogs['propertyClass.name'] == 'Типовой', 'price_corrected'] *= 1.3
-                analogs.loc[analogs['propertyClass.name'] == 'Комфорт', 'price_corrected'] *= 1.2
-        else:  # для центрального региона
-            if target_row.at[idx, 'propertyClass.name'] in ['Типовой', 'Комфорт']:
-                analogs.loc[analogs['propertyClass.name'] == 'Бизнес', 'price_corrected'] /= 1.3
-            if target_row.at[idx, 'propertyClass.name'] == 'Бизнес':
-                analogs.loc[analogs['propertyClass.name'].isin(['Типовой', 'Комфорт']), 'price_corrected'] *= 1.3
+# Применяем функцию ко всему датасету
+filtered_data, removed_counts = remove_outliers(data)
 
-        # Удаление объектов, которые на 50% меньше или больше медианы
-        median_price = analogs['price_corrected'].median()
-        analogs = analogs[(analogs['price_corrected'] >= median_price * 0.5) & 
-                          (analogs['price_corrected'] <= median_price * 1.5)]
+# Выводим количество удаленных строк для каждого региона
+for region, count in removed_counts.items():
+    print(f"Регион: {region}, удалено строк: {count}")
 
-        # Проверяем снова, есть ли аналоги после фильтрации
-        if analogs.shape[0] == 0:
-            return -1, 0, -1
-
-        # Находим итоговые значения
-        price_mean = analogs['price_corrected'].mean()
-        analog_count = analogs.shape[0]
-        readiness_mean = analogs['Readiness'].mean()
-
-        return price_mean, analog_count, readiness_mean
-    except Exception as e:
-        print(f"Ошибка при обработке индекса {idx}: {e}")
-        return None, None, None
+# Вы можете сохранить или использовать отфильтрованные данные дальше
+print(filtered_data.head())
